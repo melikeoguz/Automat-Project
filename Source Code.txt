@@ -1,0 +1,734 @@
+﻿#include <stdint.h>
+#include "inc/tm4c123gh6pm.h"
+#include <stdbool.h>
+#include "inc/hw_memmap.h"
+#include "inc/hw_types.h"
+#include "inc/hw_gpio.h"
+#include "inc/hw_ints.h"
+#include "driverlib/gpio.h"
+#include "driverlib/pin_map.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/interrupt.h"
+#include "driverlib/eeprom.h"
+#include "utils/uartstdio.h"
+#include "driverlib/uart.h"
+#include "driverlib/adc.h"
+#include "driverlib/lcd.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <_mingw.h>
+#include <string.h>
+#include <time.h>
+
+// baudrate in alabilecegi degerler: 300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200
+#define BAUDRATE 600
+
+#define pin0 0x01
+#define pin1 0x02
+#define pin2 0x04
+#define pin3 0x08
+#define pin4 0x10
+#define pin5 0x20
+#define pin6 0x40
+#define pin7 0x80
+
+
+//LCD PIN
+
+// VSS     +3.3V
+// VDD     GND
+// V0      Potentiometer's middle pin
+// RS      B0
+// RW      GND
+// E       B1
+// D0      -
+// D1      -
+// D2      -
+// D3      -
+// D4      B4
+// D5      B5
+// D6      B6
+// D7      B7
+// A       +3.3V
+// K       GND
+
+
+//Potentiometer Pin
+
+//Left     GND
+//Middle   V0
+//Right    +3.3V
+
+struct allPrice{
+    float price; //50,1.75
+    char currency[6];//kurus,tl
+};
+
+struct product{
+    char productID;
+    char productAd[50];
+    int productStock;
+    struct allPrice price;
+};
+
+
+//http://www.mcu-turkey.com/stellaris-launchpad-16x2-lcd/ sitesindeki lcd baglama kodlarindan alindi
+void Lcd_init() {
+
+    SysCtlPeripheralEnable(LCDPORTENABLE);
+    GPIOPinTypeGPIOOutput(LCDPORT, 0xFF);
+
+    SysCtlDelay(50000);
+
+    GPIOPinWrite(LCDPORT, RS,  0x00 );
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7,  0x30 );
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(10);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7,  0x30 );
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(10);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7,  0x30 );
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(10);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7,  0x20 );
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(10);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+    Lcd_Komut(0x28);
+    Lcd_Komut(0xC0);
+    Lcd_Komut(0x06);
+    Lcd_Komut(0x80);
+    Lcd_Komut(0x28);
+    Lcd_Komut(0x0f);
+    Lcd_Temizle();
+
+}
+void Lcd_Komut(unsigned char c) {
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7, (c & 0xf0) );
+    GPIOPinWrite(LCDPORT, RS, 0x00);
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(50000);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7, (c & 0x0f) << 4 );
+    GPIOPinWrite(LCDPORT, RS, 0x00);
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(10);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+}
+
+void Lcd_Putch(unsigned char d) {
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7, (d & 0xf0) );
+    GPIOPinWrite(LCDPORT, RS, 0x01);
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(10);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+    GPIOPinWrite(LCDPORT, D4 | D5 | D6 | D7, (d & 0x0f) << 4 );
+    GPIOPinWrite(LCDPORT, RS, 0x01);
+    GPIOPinWrite(LCDPORT, E, 0x02);
+    SysCtlDelay(10);
+    GPIOPinWrite(LCDPORT, E, 0x00);
+
+    SysCtlDelay(50000);
+
+}
+void Lcd_Goto(char x, char y){ // ilk deger ekranin kacinci satirinda yazinin gosterilecegini belirler
+
+    if(x==1)
+        Lcd_Komut(0x80+((y-1)%16));
+    else
+        Lcd_Komut(0xC0+((y-1)%16));
+}
+
+void Lcd_Temizle(void){
+    Lcd_Komut(0x01);
+    SysCtlDelay(10);
+}
+
+void Lcd_Puts( char* s){
+
+    while(*s)
+        Lcd_Putch(*s++);
+}
+
+void turnOnRed(){
+    GPIO_PORTE_DATA_R |=pin0;        // portE nin 0.bitini cikis yap kirmizi ledi yak
+}
+
+void turnOffRed(){
+    GPIO_PORTE_DATA_R &= ~(pin0);    // portE nin 0.bitini cikis yap kirmizi ledi sondur
+}
+
+void turnOffGreen(){
+    GPIO_PORTE_DATA_R &= ~(pin1);    // portE nin 1. Bitini cikis yap yesil ledi sˆnd¸r
+}
+void turnOnGreen(){
+    GPIO_PORTE_DATA_R |= pin1;       // portE nin 1.bitini cikis yap  yesil ledi yak
+}
+
+void turnOffLed(){
+    GPIO_PORTE_DATA_R &= ~(pin0);    // portE nin 0.bitini cikis yap kirmizi ledi sondur
+    GPIO_PORTE_DATA_R &= ~(pin1);    // portE nin 1.bitini cikis yap yesil ledi sondur
+}
+
+void turnOnLed(){
+    GPIO_PORTE_DATA_R |=pin0;        // portE nin 0.bitini kirmizi ledi yak
+    GPIO_PORTE_DATA_R |=pin1;        // portE nin 1.bitini yesil ledi yak
+}
+
+//float degeri string degere cevirmek icin yazilan bir kod
+//https://www.geeksforgeeks.org/convert-floating-point-number-string/  sitesinden yararlanilmistir
+void reverse(char *str, int len)
+{
+    volatile int i=0, j=len-1, temp;
+    while (i<j)
+    {
+        temp = str[i];
+        str[i] = str[j];
+        str[j] = temp;
+        i++; j--;
+    }
+}
+
+int intToStr(int x, char str[], int d)
+{   //derleyicinin degiskenleri silmemesi icin degiskenleri volatile olarak tanimladik
+    volatile int i = 0;
+    while (x)
+    {
+        str[i++] = (x%10) + '0';
+        x = x/10;
+    }
+
+    while (i < d)
+        str[i++] = '0';
+
+    reverse(str, i);
+    str[i] = '\0';
+    return i;
+}
+
+
+// float bir degeri string degere cevirme fonksiyonu
+void ftoa(float n, char *res, int afterpoint)
+{
+    afterpoint=2;
+    // Extract integer part
+    int ipart = (int)n;
+
+    // Extract floating part
+    float fpart = n - (float)ipart;
+
+    // convert integer part to string
+    int i = intToStr(ipart, res, 0);
+
+    // check for display option after point
+    if (afterpoint != 0)
+    {
+        res[i] = '.';
+
+        fpart = fpart * (10*10); //noktadan sonra 2 basamak goruntulenecegi icin 10^2 yerine 10*10 yazildi
+
+        intToStr((int)fpart, res + i + 1, afterpoint);
+    }
+}
+
+void moneyButtonCounter(float *totalMoney,int yirmiBesKurusButton, int elliKurusButton,int birTlButton, int endButton,int *yirmiBesKurusCounter,int *elliKurusCounter,int *birTlCounter,int *endButtonCounter){
+
+    // bu fonksiyon float olacak !
+    volatile char res[10];
+
+    if(yirmiBesKurusButton==0)
+    {
+        *yirmiBesKurusCounter+=1;
+        UARTprintf("\nyirmi bes kurus arttirildi=%d",*yirmiBesKurusCounter);
+    }
+
+    else if(elliKurusButton==0)
+    {
+        *elliKurusCounter+=1;
+        UARTprintf("\nelli kurus arttirildi=%d",*elliKurusCounter);
+    }
+
+    else if(birTlButton==0)
+    {
+        *birTlCounter+=1;
+        UARTprintf("\nbir tl arttirildi=%d",*birTlCounter);
+    }
+
+    else if(endButton==0)
+    {
+        *endButtonCounter+=1;
+        *totalMoney=(0.25*(*yirmiBesKurusCounter))+(0.5*(*elliKurusCounter))+(1.0*(*birTlCounter));
+        ftoa(*totalMoney,res,2);
+        UARTprintf("\n\nOtomata atilan para=%s\n",res);
+    }
+
+    else
+    {
+        turnOffLed();
+    }
+
+}
+
+bool productsButtonCounter(int littleRandom,float *paraUstu,float *totalMoney,float *totalProductsMoney,int suButton,int cayButton,int kahveButton,int cikolataButton,int biskuviButton,int resetButton,int calculatorButton,int *suButtonCounter,int *cayButtonCounter,int *kahveButtonCounter,int *cikolataButtonCounter,int *biskuviButtonCounter,int *resetButtonCounter,
+                           float suPrice,float cayPrice,float kahvePrice,float cikolataPrice,float biskuviPrice,int *yirmiBesKurusCounter,
+int *elliKurusCounter,
+int *birTlCounter,
+int *endButtonCounter,
+int *paraUstuBirTl,
+int *paraUstuElliKurus,
+int *paraUstuYirmiBesKurus)
+
+{
+    //Bu fonksiyon float olacak
+    volatile char res[10];
+    volatile char res2[10];
+    volatile char res3[10];
+    volatile char res4[10];
+    volatile char res5[10];
+
+    if(suButton==0)
+    {
+        *suButtonCounter+=1;
+        UARTprintf("\nsu butonuna basildi=%d",*suButtonCounter);
+   }
+
+    else if(cayButton==0)
+    {
+        *cayButtonCounter+=1;
+        UARTprintf("\ncay butonuna basildi=%d",*cayButtonCounter);
+    }
+
+    else if(kahveButton==0)
+    {
+        *kahveButtonCounter+=1;
+        UARTprintf("\nkahve butonuna basildi=%d",*kahveButtonCounter);
+    }
+
+    else if(cikolataButton==0)
+    {
+        *cikolataButtonCounter+=1;
+        UARTprintf("\ncikolata butonuna basildi=%d",*cikolataButtonCounter);
+    }
+
+   else if(biskuviButton==0)
+    {
+        *biskuviButtonCounter+=1;
+        UARTprintf("\nbiskuvi butonuna basildi=%d",*biskuviButtonCounter);
+    }
+   else if(calculatorButton==0)
+   {
+	   *totalProductsMoney=((*suButtonCounter)*suPrice)+((*cayButtonCounter)*cayPrice)+((*kahveButtonCounter)*kahvePrice)+((*cikolataButtonCounter)*cikolataPrice)+((*biskuviButtonCounter)*biskuviPrice);
+	    ftoa(*totalProductsMoney,res,2);
+	    UARTprintf("\n\nUrun tutari=%s\n",res);
+	   /* Lcd_Temizle();
+	    Lcd_Goto(1, 1);
+	    char copyRes[10];
+        strcpy(copyRes,res);
+        strcat(copyRes,"TL para attin");
+	    Lcd_Puts(copyRes);*/
+	    *paraUstu=(*totalMoney)-(*totalProductsMoney);
+	    ftoa(*paraUstu,res2,2);
+
+	    if(*paraUstu<1.00){
+	    	UARTprintf("\n\nPara ustunuz=0%s\n",res2);
+	    }
+	    else{
+	     UARTprintf("\n\nPara ustunuz=%s\n",res2);
+	    }
+
+	    UARTprintf("\nUretilen random sayi=%d\n",littleRandom);
+	     if(littleRandom==2){
+	         turnOffGreen();
+	         turnOnRed();
+	          //  while(resetButton|=0);
+           }
+
+	     else{
+	    	 UARTprintf("\nVerilecek 1 Tl sayisi=%d",*paraUstuBirTl);
+	    	 UARTprintf("\nVerilecek 50 kurus sayisi=%d",*paraUstuElliKurus);
+	    	 UARTprintf("Verilecek 25 kurus sayisi=%d",*paraUstuYirmiBesKurus);
+	    	 turnOnGreen();
+   	         turnOffRed();
+
+	     }
+
+
+
+
+
+    }
+
+    else if(resetButton==0)// ayri bir if else ac
+    {
+        *resetButtonCounter+=1;
+        UARTprintf("\nreset butonuna basildi=%d",*resetButtonCounter);
+        *suButtonCounter=0;
+        *cayButtonCounter=0;
+        *kahveButtonCounter=0;
+        *cikolataButtonCounter=0;
+        *biskuviButtonCounter=0;
+        *resetButtonCounter=0;
+        *yirmiBesKurusCounter=0;
+        *elliKurusCounter=0;
+        *birTlCounter=0;
+        *endButtonCounter=0;
+        *paraUstuBirTl=0;
+        *paraUstuElliKurus=0;
+        *paraUstuYirmiBesKurus = 0;
+        return 1;
+
+    }
+
+    else{
+        turnOffLed();
+    }
+
+    return 0;
+}
+
+
+int generateRandom(int clockSpeed){
+    int random;
+    random = (clockSpeed%4) + 1;
+    return random;
+}
+
+bool paraUstuBol(int *yirmiBesKurusCounter,int *elliKurusCounter,int *birTlCounter,float *paraUstu,int *paraUstuBirTl,int *paraUstuElliKurus, int *paraUstuYirmiBesKurus){
+
+    volatile float change = *paraUstu;
+
+    while (change != 0) {/*para ustu 0 a dusene kadar hesapla*/
+        if (change >= 1.0 && *birTlCounter >= 1) { /*1 tl ve uzerinde bir deger varsa 1tl azaltip, sayaci da bir azalt.*/
+            change -= 1.0;
+            *birTlCounter -= 1;
+            *paraUstuBirTl +=1;
+     //       UARTprintf("PARA USTU BOL 1 TL=%d\n",*paraUstuBirTl);   SUNUMDA GOSTERILECEK
+        }else if (change >= 0.75 && elliKurusCounter >= 1){
+            change -= 0.50;
+            *elliKurusCounter -= 1;
+            *paraUstuElliKurus +=1 ;
+      //      UARTprintf("PARA USTU BOL 50 K=%d\n",*paraUstuElliKurus);  SUNUMDA GOSTERILECEK
+        }else if (change >= 0.25 &&   (*yirmiBesKurusCounter)*(0.25) >= change ){
+            change -= 0.25;
+            *yirmiBesKurusCounter -= 1;
+            *paraUstuYirmiBesKurus += 1;
+    //        UARTprintf("PARA USTU BOL 25 K=%d\n",*paraUstuYirmiBesKurus);  SUNUMDA GOSTERILECEK
+        }else{/*verecek yeterli para yok demek*/
+            return 0;
+        }
+    }// ./while change >=0
+
+    return 1;
+
+}
+
+//portE deki pinlerin islevlerini yapmasi icin gerekli ayarlamalar
+void initPortE() {
+    volatile unsigned long tmp;             // gecikmeyi saglayan degisken
+    SYSCTL_RCGC2_R |= SYSCTL_RCGC2_GPIOE;   // E portunun osilatorunu etkinlestir
+    tmp = SYSCTL_RCGCGPIO_R;                // allow time for clock to start
+    GPIO_PORTE_LOCK_R = 0x4C4F434B;         // PortE nin GPIO kilitini ac
+    GPIO_PORTE_CR_R = 0x3F;                 // E0,E1,E2,E3,E4,E5 pinlerindeki degisikliklere izin ver
+
+    // Sadece PE0 kilidinin acilmasi gerekir, diger bitler kilitlenemez
+    GPIO_PORTE_AMSEL_R = 0x00;       // PE'de analog devre disi birak
+    GPIO_PORTE_PCTL_R = 0x00000000;  // PCTL GPIO on PE4-0
+    GPIO_PORTE_DIR_R = 0b00000011;   // E2,E3,E4,PE5 giris, E0,E1 cikis
+    GPIO_PORTE_AFSEL_R = 0x00;       // disable alt funct on PE7-0
+    GPIO_PORTE_PUR_R = 0b00111100;   //  butonlarin pull-up direncini ac, E2,E3,E4,E5
+
+    GPIO_PORTE_DEN_R = 0x3F;         // 7) digital I/O portlarini etkinlestir (E0,E1,E2,E3,E4,E5)
+}
+
+void initPortB() {
+    volatile unsigned long tmp; // bu degisken gecikme yapmak icin gerekli
+    tmp = SYSCTL_RCGCGPIO_R;        // allow time for clock to start
+    SYSCTL_RCGCGPIO_R |= 0x02;  // 1) activate clock for Port B
+    GPIO_PORTB_DIR_R |= 0b11110011;          // 5) PB7,PB6,PB5,PB4,PB1 and PB0 out
+    GPIO_PORTB_AFSEL_R &= ~0b11110011; // alternatif fonksiyo kapali
+    GPIO_PORTB_DEN_R |= 0b11110011;          // 7) enable digital I/O on PB7,PB6,PB5,PB4,PB1 and PB0
+    GPIO_PORTB_AMSEL_R = 0x00;       // PB'de analog devre disi birak
+    GPIO_PORTB_PCTL_R = 0x00000000;
+}
+
+
+void initPortD()
+{
+    volatile unsigned long tmp;
+    SYSCTL_RCGC2_R |= SYSCTL_RCGC2_GPIOD;   // D portunun osilatorunu etkinlestir
+    tmp = SYSCTL_RCGCGPIO_R;                   // allow time for clock to start
+    GPIO_PORTD_LOCK_R = 0x4C4F434B;
+    GPIO_PORTD_CR_R = 0x3F;
+
+    GPIO_PORTD_AMSEL_R = 0x00;        // PD'de analog devre disi birak
+    GPIO_PORTD_PCTL_R = 0x00000000;  // PCTL GPIO on PD7-0
+    GPIO_PORTD_DIR_R = 0b00000000;   // D0,D1,D2,D3,D6,D7 giris
+    GPIO_PORTD_AFSEL_R = ~(0b11001111);      // disable alt funct on PE7-0
+    GPIO_PORTD_PUR_R = 0b11001111;   // butonlarin pull-up direncini ac D0,D1,D2,D3,D6,D7
+
+    GPIO_PORTD_DEN_R = 0b11001111;   //digital I/O portlarini etkinlestir (D0,D1,D2,D3,D6,D7)
+}
+
+
+
+// UART (seri port) ayarini yapan fonksiyon
+//http://yapbenzet.kocaeli.edu.tr/sistem-programlama-seri-porttan-bilgisayara-text-gonderme-okuma/  yararlanilmistir
+void initUARTstdio() {
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+    GPIOPinConfigure(0x00000001);
+    GPIOPinConfigure(0x00000401);
+    GPIOPinTypeUART(0x40004000, 0x00000001 | 0x00000002);
+    UARTConfigSetExpClk(0x40004000, SysCtlClockGet(), BAUDRATE,
+                        (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE |
+                         UART_CONFIG_PAR_NONE));
+    UARTStdioConfig(0, BAUDRATE, SysCtlClockGet());
+}
+
+//Bu fonksiyon portf'ye erisip mudahale edebilmemiz icin gerekli ayarlari yapiyor.
+void initPortF() {
+    volatile unsigned long tmp; // bu degisken gecikme yapmak icin gerekli
+    tmp = SYSCTL_RCGCGPIO_R;        // allow time for clock to start
+    SYSCTL_RCGCGPIO_R |= 0x00000020;  // 1) activate clock for Port F
+    GPIO_PORTF_LOCK_R = 0x4C4F434B;   // 2) unlock GPIO Port F
+    GPIO_PORTF_CR_R = 0x01;           // allow changes to PF-0
+    // only PF0 needs to be unlocked, other bits can't be locked
+    GPIO_PORTF_DIR_R = 0x0E;          // 5) PF4,PF0 in, PF3-1 out
+    GPIO_PORTF_PUR_R = 0x11;          // enable pull-up on PF0 and PF4
+    GPIO_PORTF_DEN_R = 0x1F;          // 7) enable digital I/O on PF4-0
+}
+
+
+int main(void) {
+
+    initPortE();                       // portE fonksiyonunu cagir
+    initPortD();                       // portD fonksiyonunu cagir
+    initPortF();                       // portF fonksiyonunu cagir
+
+
+
+    volatile int yirmiBesKurusButton,elliKurusButton,birTlButton,endButton; //butonlari tanimladik
+    volatile int suButton,cayButton,kahveButton,cikolataButton,biskuviButton,resetButton,calculatorButton;
+    volatile  int *suButtonCounter=0,*cayButtonCounter=0,*kahveButtonCounter=0,*cikolataButtonCounter=0,*biskuviButtonCounter=0,*resetButtonCounter=0,*yirmiBesKurusCounter=0, *elliKurusCounter=0, *birTlCounter=0, *endButtonCounter=0;
+    volatile unsigned int random;       //uretilen random sayiyi tutan degisken
+    volatile unsigned int littleRandom; //uretilen random sayi generateRandom fonksiyonuna gonderdikten sonra return edilen degisken
+    volatile unsigned int i;
+    volatile float suPrice2,cayPrice2,kahvePrice2,cikolataPrice2,biskuviPrice2;
+    volatile float suPrice=0.5,cayPrice=1.0,kahvePrice=1.5,cikolataPrice=1.75,biskuviPrice=2.0; //urun fiyatlari
+    volatile float *totalMoney;
+    volatile float *totalProductsMoney;
+    volatile char res2[10];
+    volatile char res3[10];
+    volatile int *paraUstuBirTl = 0;
+    volatile int *paraUstuElliKurus = 0;
+    volatile int *paraUstuYirmiBesKurus = 0;
+    volatile float *paraUstu;
+
+    struct product list[5];
+
+    int numOf25krs , numOf50krs , numOf1tl, index = 0; /*text'in ilk satirindaki miktarlari tutar*/
+    char text[] = "20,20,10\n1,su,30,50 kurus\n2,cay,20,1 TL\n3,kahve,15,1.5 TL\n4,cikolata,50,1.75 TL\n5,biskuvi,100,2 TL\n"; /*textin tamami*/
+    char copy[5][25]; /*texti satir satir alir, parse etmek icin olusturuldu*/
+    char delim[] = ","; /*text bolucu*/
+    char delim1[] = "\n"; /*text bolucu*/
+
+    char *ptr = strtok(text, delim); /*texti bolmeye BASLADIGIMIZ nokta*/
+
+    numOf25krs = atoi(ptr); /*taneleri integer deger olarak sakliyoruz*/
+    //  printf("n25 = %d ",numOf25krs); /*denemek icindir, SILINECEK*/
+
+    ptr = strtok(NULL, delim);
+    numOf50krs = *ptr;
+    numOf50krs = atoi(ptr);
+    //  printf("n50 = %d ",numOf50krs); /*denemek icindir, SILINECEK*/
+
+    ptr = strtok(NULL, delim1);
+    numOf1tl = *ptr;
+    numOf1tl = atoi(ptr);
+    //   printf("n1 = %d ",numOf1tl); /*denemek icindir, SILINECEK*/
+
+    //   printf("\n====\n");/*denemek icindir, SILINECEK*/
+
+    ptr = strtok(NULL, delim1);
+
+
+    while(ptr != NULL)
+    {
+
+        strcpy(copy[index],ptr); /* sonra kullanmak icin satirlari tek tek kopyaliyor*/
+        ptr = strtok(NULL, delim1); /* '\n' ye gore satir boler*/
+        index++; /*satirlari sirali tutmak icin olusturuldu*/
+
+    }
+
+
+    char delim0[] = ",";
+    char delim2[] = " ";
+    char *ptrProd;
+    char *allPrice[15];
+    char *ptrPrice;
+
+    for (i = 0; i < 5; i++) {
+
+     ptrProd = strtok(copy[i], delim0); //i.satir geliyor
+     list[index] . productID = *ptrProd;
+
+     ptrProd = strtok(NULL, delim0);
+     strcpy(list[i] . productAd, ptrProd);
+
+     ptrProd = strtok(NULL, delim);
+     int stock=atoi(ptrProd);
+     strcpy(list[i] . productStock,stock);
+
+     ptrProd = strtok(NULL, delim0);
+
+     strcpy(allPrice, ptrProd);
+
+     ptrPrice = strtok(allPrice, delim2);
+
+   /*  volatile float floatPrice = atof(ptrPrice);
+     list -> price . price = floatPrice;
+
+     ptrPrice = strtok(NULL, delim2);
+     strcpy(list -> price . currency, ptrPrice);
+
+     ptrProd = strtok(NULL, delim0);*/
+
+     }
+
+
+
+
+
+    /*
+     urunlerin birim fiyatlarini olusturdugumuz struct yapisini kullanarak gerekli degiskenlere atadik
+     suPrice2=list[0].price.price;
+     cayPrice2=list[1].price.price;
+     kahvePrice2=list[2].price.price;
+     cikolataPrice2=list[3].price.price;
+     biskuviPrice2=list[4].price.price;*/
+
+    SysCtlClockSet(
+                   SYSCTL_SYSDIV_4 | SYSCTL_USE_PLL | SYSCTL_XTAL_16MHZ
+                   | SYSCTL_OSC_MAIN); //seri portta parse etme islemini gormek icin yazdik
+
+    while (1) {
+    	initUARTstdio();
+    	littleRandom=generateRandom(random);
+
+      //  Lcd_init();
+        random=rand();
+        yirmiBesKurusButton = GPIO_PORTE_DATA_R &= pin2;      //yirmiBesKurus butonunun degerini oku degiskene ata
+        elliKurusButton = GPIO_PORTE_DATA_R &= pin3;        //elliKurus butonunun degerini oku degiskene ata
+        birTlButton = GPIO_PORTE_DATA_R &= pin4;            //birTl butonunun degerini oku degiskene ata
+        endButton = GPIO_PORTE_DATA_R &= pin5;              //end butonunun degerini oku degiskene ata
+
+        suButton= GPIO_PORTD_DATA_R &= pin0;               //suButton butonunun degerini oku degiskene ata
+        cayButton= GPIO_PORTD_DATA_R &= pin1;              //cayButton butonunun degerini oku degiskene ata
+        kahveButton= GPIO_PORTD_DATA_R &= pin2;            //kahveButton butonunun degerini oku degiskene ata
+        cikolataButton= GPIO_PORTD_DATA_R &= pin3;         //cikolataButton butonunun degerini oku degiskene ata
+        biskuviButton= GPIO_PORTD_DATA_R &= pin6;          //biskuviButton butonunun degerini oku degiskene ata
+        resetButton= GPIO_PORTF_DATA_R &= 0b00001;         //resetButton butonunun degerini oku degiskene ata
+        calculatorButton=GPIO_PORTF_DATA_R &= 0b10000;
+
+       moneyButtonCounter(&totalMoney,yirmiBesKurusButton,elliKurusButton,birTlButton,endButton,&yirmiBesKurusCounter,&elliKurusCounter,&birTlCounter,&endButtonCounter);
+
+      /*  productsButtonCounter(&paraUstu,&totalMoney,&totalProductsMoney,suButton,cayButton,kahveButton,cikolataButton,biskuviButton,resetButton,calculatorButton,&suButtonCounter,&cayButtonCounter,&kahveButtonCounter,&cikolataButtonCounter,&biskuviButtonCounter,&resetButtonCounter,
+         suPrice,cayPrice,kahvePrice,cikolataPrice,biskuviPrice);*/
+
+
+
+        volatile bool resetlediMi=0;
+               resetlediMi = productsButtonCounter(littleRandom,&paraUstu,&totalMoney,&totalProductsMoney,suButton,cayButton,kahveButton,cikolataButton,biskuviButton,resetButton,calculatorButton,&suButtonCounter,&cayButtonCounter,&kahveButtonCounter,&cikolataButtonCounter,&biskuviButtonCounter,&resetButtonCounter,
+            	         suPrice,cayPrice,kahvePrice,cikolataPrice,biskuviPrice,&yirmiBesKurusCounter,
+						 &elliKurusCounter,
+						 &birTlCounter,
+						 &endButtonCounter,
+						 &paraUstuBirTl,
+						 &paraUstuElliKurus,
+						 &paraUstuYirmiBesKurus);
+
+     //        if (resetlediMi) { /*resetledi mi 1 ise resetlemistir*/
+        /*    	   *suButtonCounter=0;
+            	   *cayButtonCounter=0;
+            	   *kahveButtonCounter=0;
+            	   *cikolataButtonCounter=0;
+            	   *biskuviButtonCounter=0;
+            	   *resetButtonCounter=0;
+            	   *yirmiBesKurusCounter=0;
+            	   *elliKurusCounter=0;
+            	   *birTlCounter=0;
+            	   *endButtonCounter=0;
+            	   *paraUstuBirTl=0;
+            	   *paraUstuElliKurus=0;
+            	   *paraUstuYirmiBesKurus = 0;
+            	   UARTprintf("\nresetlendiniz");
+
+            }*/
+
+
+
+
+       volatile bool paraYettiMi = paraUstuBol( &yirmiBesKurusCounter,&elliKurusCounter, &birTlCounter,&paraUstu,&paraUstuBirTl,&paraUstuElliKurus,&paraUstuYirmiBesKurus);
+
+
+      if (paraYettiMi) {
+            list[0].productStock -= *suButtonCounter;
+            list[1].productStock -= *cayButtonCounter;
+            list[2].productStock -= *kahveButtonCounter;
+            list[3].productStock -= *cikolataButtonCounter;
+            list[4].productStock -= *biskuviButtonCounter;
+            UARTprintf("\nUrunler stoktan dustu\n");
+            UARTprintf("su stok = %d",list[0].productStock);
+            UARTprintf("cay stok = %d",list[1].productStock);
+            UARTprintf("kahve stok = %d",list[2].productStock);
+            UARTprintf("cikolata stok = %d",list[3].productStock);
+            UARTprintf("biskuvi stok = %d",list[4].productStock);
+
+        }else{
+           /* Lcd_Temizle();
+            Lcd_Goto(1, 1);
+            Lcd_Puts("KASADA PARA YOK.");*/
+        }
+
+
+
+
+
+
+
+
+    } //while's curly bracket
+
+
+
+
+
+
+}
